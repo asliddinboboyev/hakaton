@@ -888,14 +888,17 @@ def _context_injection(risk: Dict[str, Any], user_message: str) -> str:
 
         if knowledge:
             base += (
-                f"\n[VERIFIED MEDICAL KNOWLEDGE — use this as factual reference]\n"
+                f"\n[TASDIQLANGAN TIBBIY MA'LUMOT — BU MA'LUMOTNI JAVOBINGIZDA ISHLATISH MAJBURIY]\n"
                 f"{knowledge}\n"
-                f"Use this verified information to give accurate, specific answers.\n"
-                f"Do not reveal that you looked up a database — answer naturally.\n"
+                f"QOIDA: Yuqoridagi ma'lumotlardagi aniq faktlarni (yon ta'sirlar, qabul qilish usuli, "
+                f"muhim ogohlantirishlar) javobingizga qo'shing. "
+                f"'Ma'lumotlar bazasidan oldim' demang — tabiiy gapiring. "
+                f"Agar bemor o'zbek tilida yozgan bo'lsa — o'zbek tilida javob bering va "
+                f"yuqoridagi ma'lumotlardan aniq faktlarni ishlating.\n"
             )
         if lab_info:
             base += (
-                f"\n[LAB REFERENCE VALUES]\n"
+                f"\n[LABORATORIYA ME'YORLARI — aniq raqamlarni ishlatish mumkin]\n"
                 f"{lab_info}\n"
             )
 
