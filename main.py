@@ -1898,46 +1898,46 @@ def generate_reply(session_id: str, user_message: str, risk: Dict[str, Any]) -> 
         )
 
     history = get_history(session_id)
-
-    # Knowledge base dan ma'lumot olamiz
     knowledge = search_knowledge(user_message, max_items=3)
     lab_info  = get_lab_info(user_message)
 
-    # System prompt ga knowledge base ni BEVOSITA kiritamiz
-    dynamic_system = SYSTEM_PROMPT
-
-    if knowledge or lab_info:
-        dynamic_system += "\n\n" + "═" * 60
-        dynamic_system += "\nQUYIDAGI TIBBIY MA'LUMOTLAR TASDIQLANGAN MANBALARDAN OLINGAN."
-        dynamic_system += "\nBU MA'LUMOTLARNI JAVOBINGIZDA ANIQ VA TO'LIQ ISHLATISH SHART."
-        dynamic_system += "\nUMUMIY GAPIRMANG — ANIQ FAKTLAR AYTNG.\n"
-        dynamic_system += "═" * 60 + "\n"
-
-        if knowledge:
-            dynamic_system += knowledge + "\n"
-        if lab_info:
-            dynamic_system += lab_info + "\n"
-
-        dynamic_system += "═" * 60
-        dynamic_system += "\nYuqoridagi ma'lumotlardagi BARCHA aniq faktlarni (doza qoidasi, "
-        dynamic_system += "yon ta'sirlar, muhim ogohlantirishlar, raqamlar) javobingizga qo'shing."
-        dynamic_system += "\nFoydalanuvchi tilida (o'zbek/rus/ingliz) javob bering."
-
-    # Risk kontekst
-    risk_context = (
-        f"\n[ICHKI TAHLIL — FOYDALANUVCHIGA KO'RSATMANG]\n"
-        f"risk_level: {risk['risk_level']}\n"
-        f"risk_flags: {risk['risk_flags']}\n"
-        f"language: {risk['detected_language']}\n"
-        f"URGENT bo'lsa — darhol 103 ga yo'naltir.\n"
-        f"HIGH bo'lsa — shifokor/farmatsevtga murojaat tavsiya qil."
+    risk_system = (
+        f"Risk darajasi: {risk['risk_level']}. "
+        f"Flags: {risk['risk_flags']}. "
+        f"Til: {risk['detected_language']}. "
+        f"URGENT bolsa darhol 103 ga yonaltir. "
+        f"HIGH bolsa shifokor yoki farmatsevtga murojaat tavsiya qil."
     )
 
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": dynamic_system + risk_context},
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": risk_system},
         *history,
-        {"role": "user", "content": user_message},
     ]
+
+    # Knowledge base mavjud bolsa — assistant prefill usuli
+    # AI buni olzi bilgandek qabul qiladi va javobida ishlatadi
+    if knowledge or lab_info:
+        kb = ""
+        if knowledge:
+            kb += knowledge + "\n"
+        if lab_info:
+            kb += lab_info + "\n"
+
+        messages.append({"role": "user", "content": user_message})
+        messages.append({
+            "role": "assistant",
+            "content": (
+                f"Bu savol boyicha tasdiqlangan tibbiy malumotlar:\n\n{kb}\n"
+                f"Endi shu aniq faktlar asosida bemorga yordam beraman."
+            )
+        })
+        messages.append({
+            "role": "user",
+            "content": "Yuqoridagi malumotlar asosida aniq, foydali va empatik javob ber. Umumiy gapirma."
+        })
+    else:
+        messages.append({"role": "user", "content": user_message})
 
     try:
         completion = client.chat.completions.create(
@@ -1954,7 +1954,7 @@ def generate_reply(session_id: str, user_message: str, risk: Dict[str, Any]) -> 
 
     reply = completion.choices[0].message.content.strip()
     tokens = getattr(completion.usage, "total_tokens", 0)
-    log.info(f"[{session_id[:8]}] risk={risk['risk_level']} tokens={tokens}")
+    log.info(f"[{session_id[:8]}] risk={risk['risk_level']} kb={bool(knowledge)} tokens={tokens}")
 
     append_history(session_id, "user",      user_message)
     append_history(session_id, "assistant", reply)
@@ -1962,30 +1962,6 @@ def generate_reply(session_id: str, user_message: str, risk: Dict[str, Any]) -> 
     return reply
 
 
-# ══════════════════════════════════════════════════════════════════════
-# FASTAPI APP
-# ══════════════════════════════════════════════════════════════════════
-
-app = FastAPI(
-    title="Tabib AI — Medication Adherence Expert",
-    description="Clinical-grade AI chatbot for medication adherence support",
-    version="2.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ══════════════════════════════════════════════════════════════════════
-# API ROUTES
-# ══════════════════════════════════════════════════════════════════════
-
-@app.get("/health")
 def health():
     return {
         "status":               "ok",
