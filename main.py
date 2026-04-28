@@ -1899,9 +1899,42 @@ def generate_reply(session_id: str, user_message: str, risk: Dict[str, Any]) -> 
 
     history = get_history(session_id)
 
+    # Knowledge base dan ma'lumot olamiz
+    knowledge = search_knowledge(user_message, max_items=3)
+    lab_info  = get_lab_info(user_message)
+
+    # System prompt ga knowledge base ni BEVOSITA kiritamiz
+    dynamic_system = SYSTEM_PROMPT
+
+    if knowledge or lab_info:
+        dynamic_system += "\n\n" + "═" * 60
+        dynamic_system += "\nQUYIDAGI TIBBIY MA'LUMOTLAR TASDIQLANGAN MANBALARDAN OLINGAN."
+        dynamic_system += "\nBU MA'LUMOTLARNI JAVOBINGIZDA ANIQ VA TO'LIQ ISHLATISH SHART."
+        dynamic_system += "\nUMUMIY GAPIRMANG — ANIQ FAKTLAR AYTNG.\n"
+        dynamic_system += "═" * 60 + "\n"
+
+        if knowledge:
+            dynamic_system += knowledge + "\n"
+        if lab_info:
+            dynamic_system += lab_info + "\n"
+
+        dynamic_system += "═" * 60
+        dynamic_system += "\nYuqoridagi ma'lumotlardagi BARCHA aniq faktlarni (doza qoidasi, "
+        dynamic_system += "yon ta'sirlar, muhim ogohlantirishlar, raqamlar) javobingizga qo'shing."
+        dynamic_system += "\nFoydalanuvchi tilida (o'zbek/rus/ingliz) javob bering."
+
+    # Risk kontekst
+    risk_context = (
+        f"\n[ICHKI TAHLIL — FOYDALANUVCHIGA KO'RSATMANG]\n"
+        f"risk_level: {risk['risk_level']}\n"
+        f"risk_flags: {risk['risk_flags']}\n"
+        f"language: {risk['detected_language']}\n"
+        f"URGENT bo'lsa — darhol 103 ga yo'naltir.\n"
+        f"HIGH bo'lsa — shifokor/farmatsevtga murojaat tavsiya qil."
+    )
+
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": _context_injection(risk, user_message)},
+        {"role": "system", "content": dynamic_system + risk_context},
         *history,
         {"role": "user", "content": user_message},
     ]
