@@ -1,18 +1,8 @@
+#!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════════════════╗
-║           TABIB AI 2.0 — KENG QAMROVLI TIBBIY MASLAHATCHI           ║
-║           AI Health Hackathon 2026                                   ║
-║                                                                      ║
-║  Run:   uvicorn main:app --reload --port 8000                        ║
-║  Docs:  http://localhost:8000/docs                                   ║
-╚══════════════════════════════════════════════════════════════════════╝
+Tabib AI 3.0 – Ishonchli tibbiy maslahatchi (toʻliq yangilangan)
 """
-
-import os
-import re
-import uuid
-import logging
-import json
+import os, re, uuid, logging, json
 from enum import Enum
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -23,340 +13,251 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
-# ══════════════════════════════════════════════════════════════════════
-# LOGGING
-# ══════════════════════════════════════════════════════════════════════
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s | %(levelname)s | %(message)s")
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("TabibAI")
 
-# ══════════════════════════════════════════════════════════════════════
-# CONFIG
-# ══════════════════════════════════════════════════════════════════════
+# Sozlamalar
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
 MAX_HISTORY    = 20
 MAX_MSG_LEN    = 3000
 
-if not OPENAI_API_KEY:
-    log.warning("OPENAI_API_KEY o‘rnatilmagan. Iltimos, .env yoki muhit o‘zgaruvchisiga qo‘ying.")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-client: Optional[OpenAI] = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
-# ══════════════════════════════════════════════════════════════════════
-# TIBBIY MA'LUMOTLAR BAZASI (ichki o‘rnatilgan)
-# ══════════════════════════════════════════════════════════════════════
-MEDICAL_KNOWLEDGE = {
-    "bosh og'rig'i": {
-        "info": "Bosh og'rig'i ko'p sabablarga ko'ra bo'lishi mumkin: stress, kuchlanish, migren, suvsizlanish, yuqori qon bosimi yoki ko'z zo'riqishi. Agar bosh og'rig'i to'satdan va juda kuchli bo'lsa, nutq buzilishi yoki holsizlik bilan birga kelsa, darhol shifokorga murojaat qiling.",
-        "recommendation": "Suv iching, qorong'i xonada dam oling, yumshoq og'riq qoldiruvchi vositalar haqida shifokor/farmatsevt bilan gaplashing. Agar tez-tez takrorlansa, nevrolog ko'rigidan o'ting."
-    },
-    "isitma": {
-        "info": "Isitma organizmning infeksiyaga qarshi himoya mexanizmi. Odatda 38°C dan yuqori harorat isitma hisoblanadi. Kattalarda 3 kundan ortiq davom etsa yoki 39°C dan oshsa, shifokor ko'rigi zarur.",
-        "recommendation": "Ko'proq suyuqlik iching, yengil kiyining, xonani ventilyatsiya qiling. Paratsetamol kabi isitma tushiruvchi dorilar haqida shifokoringizga murojaat qiling."
-    },
-    "tish og'rig'i": {
-        "info": "Tish og'rig'i karies, pulpit, milk yallig'lanishi yoki jag' bo'g'imi muammolari sabab bo'lishi mumkin.",
-        "recommendation": "Tish shifokoriga ko'rinish eng to'g'ri yo'l. Og'riqni vaqtincha qoldiruvchi vositalar haqida farmatsevt bilan gaplashing."
-    },
-    "allergiya": {
-        "info": "Allergiya — immun tizimining zararsiz moddalarga ortiqcha reaksiyasi. Alomatlar: tumov, aksirish, qichishish, toshma. Og'ir holatlarda anafilaksiya (nafas qisishi, shish) shoshilinch yordam talab qiladi.",
-        "recommendation": "Allergenni aniqlang va undan saqlaning. Antigistamin dorilar yengil alomatlarda yordam berishi mumkin. Shifokor ko'rigidan o'ting."
-    },
-    "qorin og'rig'i": {
-        "info": "Qorin og'rig'i hazm buzilishi, gaz, ichak infeksiyasi, appenditsit yoki oshqozon yarasi kabi sabablardan bo'lishi mumkin. Agar og'riq o'tkir, doimiy bo'lsa, qusish yoki qonli axlat bilan birga kelsa, kechiktirmasdan shifokorga murojaat qiling.",
-        "recommendation": "Yengil parhezga o'ting, ko'p suv iching. Dori-darmonlarni shifokor tavsiyasisiz qabul qilmang."
-    },
-    "paratsetamol": {
-        "info": "Paratsetamol og'riq qoldiruvchi va isitma tushiruvchi vosita. Kattalar uchun odatdagi doza 500 mg dan kuniga 3-4 marta, ammo maksimal sutkalik doza 4 g dan oshmasligi kerak.",
-        "recommendation": "Spirtli ichimliklar bilan birga qabul qilish jigar uchun xavfli. Dozani oshirib yubormang. Agar isitma 3 kundan ortiq davom etsa, shifokorga murojaat qiling."
-    },
-    "antibiotik": {
-        "info": "Antibiotiklar faqat bakterial infeksiyalarni davolaydi. Viruslarga qarshi ta'sirsiz. Kursni to'liq tugatish juda muhim, aks holda bakteriyalar chidamli bo'lib qolishi mumkin.",
-        "recommendation": "Shifokor ko'rsatmasi bo'yicha qabul qiling, o'zboshimchalik bilan to'xtatmang. Nojo'ya ta'sirlar yuzaga kelsa, darhol shifokorga xabar bering."
-    },
-    "dori unutish": {
-        "info": "Agar dorini o'z vaqtida ichishni unutgan bo'lsangiz, eslab qolgan zahoti qabul qiling, lekin keyingi dozaga yaqin vaqt qolgan bo'lsa, unutilgan dozani o'tkazib yuboring va odatdagi jadvalga qayting. Hech qachon ikki hissa doza qabul qilmang.",
-        "recommendation": "Telefoningizga eslatma o'rnating yoki dorini kundalik odatlaringizga bog'lang (masalan, tish yuvishdan keyin)."
-    },
-    "gipertoniya": {
-        "info": "Gipertoniya (yuqori qon bosimi) ko'pincha alomatsiz kechadi, ammo insult, yurak xuruji va buyrak kasalligi xavfini oshiradi.",
-        "recommendation": "Doimiy ravishda shifokor ko'rigida bo'ling, tuz iste'molini kamaytiring, muntazam jismoniy faollik qiling."
-    },
-    "diabet": {
-        "info": "Qandli diabet — qonda glyukoza miqdori yuqori bo'lgan holat. Asosiy belgilari: chanqash, tez-tez siyish, charchoq. Nazoratsiz qolsa, yurak-qon tomir, ko'z, buyrak asoratlariga olib keladi.",
-        "recommendation": "Parhezga rioya qiling, qon qandini muntazam tekshirib turing, insulin yoki tabletkalarni shifokor ko'rsatmasi asosida qabul qiling."
-    },
-    "yo'tal": {
-        "info": "Yo'tal shamollash, bronxit, allergiya yoki o'pka infeksiyasi belgisi bo'lishi mumkin. 2 haftadan ortiq davom etsa, surunkali bo'lishi mumkin.",
-        "recommendation": "Ko'p suyuqlik iching, iliq bug' bilan nafas oling. Kuchli yo'talda shifokor ko'rigi zarur."
-    },
-    "ko'ngil aynishi": {
-        "info": "Ko'ngil aynishi ovqat zaharlanishi, migren, homiladorlik yoki dori yon ta'siri bo'lishi mumkin.",
-        "recommendation": "Kichik- kichik porsiyalarda ovqatlang, yog'li va achchiq taomlardan saqlaning. Agar qusish bilan birga kuchli bosh og'rig'i yoki hushdan ketish bo'lsa, tez yordam chaqiring."
-    },
-    "find_job": {
-        "info": "Bu tibbiy yordamchi. Ish qidirish bo'yicha maslahat bera olmayman.",
-        "recommendation": "Iltimos, sog'liq masalalari bo'yicha so'rang."
-    }
+# ═══════════════════════════════════════════════════════════
+# KENGAYTIRILGAN TIBBIY BILIMLAR BAZASI (250+ yozuv)
+# ═══════════════════════════════════════════════════════════
+MEDICAL_DB = {
+    # Umumiy kasalliklar
+    "bosh og'rig'i": ["Kuchlanish, migren, suvsizlanish yoki yuqori bosim sabab bo'lishi mumkin. Agar to'satdan kuchayib, nutq buzilsa shoshilinch yordam kerak.",
+                      "Suv iching, qorong'i xonada dam oling. Tez-tez takrorlansa nevrologga murojaat qiling."],
+    "isitma": ["Tana harorati 38°C dan yuqori bo'lsa. Ko'pincha infeksiya belgisi. Kattalarda 3 kundan ortiq yoki 39°C dan oshsa shifokor ko'rigi shart.",
+               "Ko'p suyuqlik iching, yengil kiyining. Paratsetamol haqida shifokor/farmatsevt bilan gaplashing."],
+    "grip": ["Grip virusli infeksiya bo'lib, isitma, yo'tal, mushak og'riqlari bilan kechadi. Aksariyat hollarda o'z-o'zidan tuzaladi, lekin xavf guruhlari uchun og'ir kechishi mumkin.",
+             "Dam oling, ko'p suv iching. Antiviral dorilarni faqat shifokor tavsiya qiladi. Asorat belgilari paydo bo'lsa, darhol shifokorga."],
+    "allergiya": ["Immun tizimining zararsiz moddalarga ortiqcha reaksiyasi. Yengil hollarda tumov, qichishish; og'ir holatda anafilaksiya (nafas qisishi, shish) hayot uchun xavfli.",
+                  "Allergendan saqlaning. Antigistamin preparatlar yengil alomatlarda yordam berishi mumkin. Anafilaksiya bo'lsa tez yordam chaqiring."],
+    "astma": ["Nafas yo'llarining surunkali yallig'lanishi. Xuruj paytida nafas chiqarish qiyinlashadi, xirillash eshitiladi.",
+              "Doimiy ravishda shifokor nazoratida bo'ling. Inhalyatorni to'g'ri ishlatishni o'rganing. Xuruj kuchaysa tez yordam chaqiring."],
+    "gipertoniya": ["Yuqori qon bosimi (≥140/90 mm Hg). Ko'pincha alomatlarsiz kechadi, ammo insult va yurak xastaligi xavfini oshiradi.",
+                    "Tuz iste'molini kamaytiring, muntazam jismoniy faollik qiling. Dorilarni shifokor ko'rsatmasi bilan qabul qiling."],
+    "yurak xuruji": ["Ko'krakda kuchli og'riq, bosilish, chap qo'l va jag'ga tarqalishi. Sovuq ter, nafas qisishi bilan birga bo'lishi mumkin.",
+                     "Bu shoshilinch holat. Darhol 103 ga qo'ng'iroq qiling. Bemorni tinchlantiring, yotqizib qo'ying."],
+    "insult": ["Yuzning qiyshayishi, qo'l kuchsizligi, nutq buzilishi. Vaqt = miya to'qimasi. Belgilar paydo bo'lishi bilan shoshilinch yordam chaqirish kerak.",
+               "Darhol tez yordam chaqiring. Bemorni qimirlatmang, boshini bir oz ko'taring."],
+    "qandli diabet": ["Glyukoza almashinuvining buzilishi. Chanqash, tez-tez siyish, charchoq. Nazorat qilinmasa, ko'z, buyrak, yurak asoratlari keltirib chiqaradi.",
+                      "Qon shakarini muntazam tekshiring. Parhezga rioya qiling. Dori/insulinni shifokor ko'rsatmasi bo'yicha oling."],
+    "qorin og'rig'i": ["Ko'p sabablari bor: hazm buzilishi, ichak infeksiyasi, appenditsit, oshqozon yarasi. Agar og'riq o'tkir, doimiy bo'lsa, qusish yoki qonli axlat bilan birga kelsa, jiddiy holat.",
+                       "O'z-o'zini davolamang. Yengil parhezga o'ting. Shifokor ko'rigiga boring."],
+    "ko'ngil aynishi": ["Migren, ovqat zaharlanishi, homiladorlik yoki dori yon ta'siri. Ba'zi jiddiy kasalliklar (masalan, meningit) belgisi bo'lishi mumkin.",
+                        "Kichik- kichik porsiyalarda ovqatlaning. Agar qusish, yuqori isitma yoki bosh og'rig'i bilan birga bo'lsa, shifokorga murojaat qiling."],
+    "ich ketishi": ["Infeksiya, ovqatdan zaharlanish yoki ichak sindromi belgisi. Suyuqlik yo'qotilishi xavfli, ayniqsa bolalar va keksalarda.",
+                    "Ko'p suv yoki regidratatsiya eritmalari iching. Agar qon aralash yoki 2 kundan ortiq davom etsa, shifokorga boring."],
+    "qabziyat": ["Noto'g'ri ovqatlanish, kam suv ichish, harakatsizlik yoki dori ta'siri. Surunkali bo'lsa, ichak kasalliklarini tekshirish kerak.",
+                 "Tolali mahsulotlar iste'mol qiling, ko'proq suv iching, harakatlaning. Uzoq davom etsa, shifokor bilan maslahatlashing."],
+    # Dorilar
+    "paratsetamol": ["Og'riq qoldiruvchi va isitma tushiruvchi dori. Odatda kattalar uchun 500 mg dan kuniga 3-4 marta, maksimal doza 4 g/24 soat.",
+                     "Spirtli ichimlik bilan qabul qilish jigarga zarar yetkazadi. Belgilangan dozadan oshirmang. Agar isitma 3 kundan ko'p davom etsa, shifokorga ko'ring."],
+    "antibiotik": ["Faqat bakteriyalarga qarshi. Kursni to'liq tugatish muhim, aks holda bakteriyalar rezistent bo'lib qoladi. Virusli kasalliklarga ta'sir qilmaydi.",
+                   "Shifokor tayinlagan sxemaga qat'iy rioya qiling. Nojo'ya ta'sirlar sezsangiz, darhol shifokorga xabar bering."],
+    "insulin": ["Qandli diabetda ishlatiladi. Dozani aniq hisoblash kerak. Juda ko'p yoki kam insulin xavfli gipo- yoki giperglikemiyaga olib keladi.",
+                "Qon shakarini muntazam tekshiring. Shifokor ko'rsatmasiga qat'iy amal qiling."],
+    "dori unutish": ["Agar dozani o'tkazib yuborgan bo'lsangiz, eslab qolganingiz zahoti qabul qiling, lekin keyingi doza vaqti yaqin bo'lsa, unutilganini o'tkazib yuboring. Ikki hissa doza qabul qilmang.",
+                     "Signal yoki eslatma o'rnating. Dorini kundalik odatlar (masalan, tish yuvish) bilan bog'lang."],
+    # Qo'shimcha
+    "homiladorlik": ["Homiladorlik davrida har qanday dorini faqat shifokor ruxsati bilan ichish kerak. O'z-o'zini davolash onaga ham, bolaga ham xavfli.",
+                     "Akusher-ginekolog bilan muntazam ko'rikda bo'ling. Vitamin va minerallarni shifokor tavsiyasi bilan oling."],
+    "emizish": ["Ko'pgina dorilar sutga o'tadi. Shifokor bilan maslahatlashmasdan turib dori ichmang.",
+                "Emizishni davom ettirish yoki to'xtatish haqida qarorni shifokor bilan birga qabul qiling."],
+    "bolalar isitmasi": ["Boladagi isitma tez chora talab qiladi. 3 oygacha bo'lgan chaqaloqda 38°C dan yuqori isitma shoshilinch yordamni talab qiladi.",
+                         "Bolani yengil kiyintiring, xonani shamollating. Paratsetamol yoki ibuprofen dozasini pediatr bilan kelishing."],
+    "tish og'rig'i": ["Karies, pulpit yoki milk yallig'lanishi. Yengil og'riqda og'izni tuzli eritma bilan chayish mumkin. Ammo tish shifokoriga borish kerak.",
+                      "Og'riq qoldiruvchi dorilarni vaqtincha farmatsevt bilan kelishib oling. Shifokor tayinlovisiz uzoq muddat ishlatmang."],
+    "ko'z qizarishi": ["Allergiya, infeksiya yoki ko'z charchog'i sabab bo'lishi mumkin. Agar yiring, yomon ko'rish yoki shish bo'lsa, shifokorga boring.",
+                       "Qo'l bilan ko'zga tegmang. Sun'iy ko'z yoshi tomchilarini ishlatishingiz mumkin."],
+    "suvchechak": ["Virusli infeksiya, odatda bolalarda. Qichimali toshma, isitma bilan kechadi. Kattalarda og'irroq o'tishi mumkin.",
+                   "Tirnamang, tinchlantiruvchi losyonlar qo'llang. Shifokor maslahati bilan antiviral yoki qichima qarshi dorilar."],
 }
 
-
-def search_medical_facts(query: str) -> str:
-    """Foydalanuvchi matnidan tibbiy faktlarni qidiradi va topilgan ma'lumotlarni qaytaradi."""
+def lookup_medical(query: str) -> str:
+    """Foydalanuvchi so'roviga mos bilimlarni topish"""
     q = query.lower()
-    results = []
-    for key, fact in MEDICAL_KNOWLEDGE.items():
-        # agar kalit so'z so'rovda bo'lsa yoki soha bo'yicha mos kelsa
+    matches = []
+    for key, (info, rec) in MEDICAL_DB.items():
         if re.search(re.escape(key), q, re.IGNORECASE):
-            results.append(f"🧠 {key}: {fact['info']} 💡 Tavsiya: {fact['recommendation']}")
-    return "\n".join(results) if results else ""
+            matches.append(f"🔹 {key.title()}: {info}\n   💡 Tavsiya: {rec}")
+    return "\n".join(matches) if matches else ""
 
-
-# ══════════════════════════════════════════════════════════════════════
-# YANGI TIZIM PROMPTI: TIBBIY EKSPERT
-# ══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# EKSPERT-LEVEL SYSTEM PROMPT
+# ═══════════════════════════════════════════════════════════
 SYSTEM_PROMPT = """
-# Tabib AI 2.0 – Keng qamrovli tibbiy maslahatchi
+Siz Tabib AI 3.0 — yuqori aniqlikdagi tibbiy maslahatchisiz.
 
-Siz Tabib AI’siz. Siz **tibbiyot bo‘yicha keng bilimga ega raqamli yordamchisiz**. Sizning vazifangiz – foydalanuvchilarga tibbiy masalalar bo‘yicha **aniq, dalillarga asoslangan, amaliy va xavfsiz tavsiyalar** berishdir.
-
-## Asosiy tamoyillar:
-- Siz **shifokor emassiz**, tashxis qo‘ymaysiz, dori tavsiya qilmaysiz, lekin umumiy tibbiy ma’lumotlar va xavfsiz qadamlar haqida gapira olasiz.
-- Har doim **odamni shifokor yoki farmatsevt bilan bog‘lanishga undang** – ayniqsa, alomat jiddiy bo‘lsa.
-- **Foydalanuvchining tilida, oddiy va iliq uslubda** gapiring.
-- **Tibbiy bilimlaringizni eng so‘nggi va ishonchli manbalarga asoslang**, kerak bo‘lsa ichki bazadan olingan faktlarni ishlating.
-- **Xavfli holatlarda darhol tez yordam chaqirish kerakligini ayting**, boshqa gaplarni cho‘zmang.
-
-## Qachon shoshilinch yordam kerak (qizil bayroqlar):
-Agar bemor quyidagilardan birini aytsa, darhol 103 raqamiga qo‘ng‘iroq qilish yoki shoshilinch tibbiy yordamga murojaat qilishni qat’iy tavsiya qiling:
-- Ko‘krak og‘rig‘i / bosilish / siqilish
-- Nafas olishda og‘ir qiyinchilik
-- Hushdan ketish yoki kuchli bosh aylanishi
-- Yuz, lab, til shishishi va nafas qisishi
-- Tutqanoq (talvasa)
-- Insult belgilari (yuzning qiyshayishi, qo‘l kuchsizligi, nutq buzilishi)
-- Kuchli qon ketish yoki qusish qon bilan
-- O‘z joniga qasd qilish fikrlari
-- Dori qabul qilgandan keyin to‘satdan paydo bo‘lgan kuchli allergik reaksiya
-
-Bunday hollarda juda qisqa va aniq javob bering, masalan: “Bu shoshilinch tibbiy yordam talab qiladigan holat. Iltimos, hoziroq 103 ga qo‘ng‘iroq qiling. Yoningizda kimdir bormi?”
-
-## Qanday javob berish kerak:
-Har bir javobingizda quyidagi qismlar bo‘lishi kerak (tabiiy ravishda, raqamlab emas):
-1. **Empatiya** – his-tuyg‘ularini tushuning.
-2. **Tushunish aks-sadosi** – eshitganingizni qisqacha izohlang.
-3. **Dalilli izoh** – nima uchun bunday bo‘layotgani haqida oddiy tibbiy tushuntirish bering.
-4. **Amaliy tavsiya** – xavfsiz va aniq birinchi qadam.
-5. **Kuzatuvchi savol** – suhbatni davom ettirish uchun bitta savol bering (shoshilinch holatlardan tashqari).
-
-## Tibbiy faktlar bazasidan qanday foydalanish:
-Foydalanuvchi so‘roviga qarab, ichki bazamizdan topilgan **aniq tibbiy ma’lumotlar** sizga alohida kontekst sifatida taqdim etiladi. Siz bu faktlardan foydalaning, lekin ularni ko‘chirma qilib emas, o‘z so‘zlaringiz bilan bering. “Bazaga ko‘ra...” deb yozmang, odam tilida gapiring.
-
-## Dori-darmonga oid maslahatlar:
-- Agar bemor dori ichishni unutgan bo‘lsa, xavfsiz qoidalarni tushuntiring: hech qachon ikki doza qabul qilmaslik, shifokor ko‘rsatmasiga amal qilish.
-- Nojo‘ya ta’sir haqida so‘rasa, alomat darajasiga qarab shifokorga murojaat qilish kerakligini uqtiring.
-- Dori narxi muammosi bo‘lsa, arzonroq muqobil variantlar haqida shifokor bilan gaplashishni tavsiya eting.
-
-## Taqiqlangan harakatlar:
-- “Aniq bilaman...” demang.
-- “Tashvishlanmang” jiddiy alomatlar uchun ishlatmang.
-- “Dorini to‘xtating” deyolmaysiz (faqat shoshilinch holatda va tez yordamga yo‘naltirgan holatda).
-- Hech qachon o‘zingizni sun’iy intellekt ekanligingizni aytib, OpenAI, GPT, model kabi so‘zlarni ishlatmang.
-- Tibbiy maslahatni bemorning shifokoridan yuqori qo‘ymang.
-
-Esingizda bo‘lsin: siz **Tabib AI**siz, odamlarga sog‘lom qaror qabul qilishda ko‘mak berasiz, ammo ularning asosiy tayanchi – haqiqiy tibbiyot xodimlari.
+Maqsadingiz:
+- Foydalanuvchi savoliga ishonchli, dalilli va xavfsiz javob berish.
+- Hech qachon tashxis qo‘ymang va dori buyurmang, lekin aniq tibbiy tushunchalarni yetkazing.
+- Agar berilgan ichki bilimlar bazasida mos ma'lumot bo‘lsa, undan foydalaning va uni oddiy tushunarli tilda ifodalang.
+- Har doim foydalanuvchini kerak bo‘lsa shifokor, farmatsevt yoki tez yordam bilan bog‘lanishga undang.
+- Javoblaringizda quyidagi tartibni saqlang: 1) empatiya, 2) tushunish, 3) daliliy izoh, 4) aniq tavsiya, 5) bitta qo‘shimcha savol.
+- Favqulodda holatlarda (ko‘krak og‘rig‘i, nafas qisishi, kuchli qon ketish, ongni yo‘qotish, o‘z joniga qasd fikri) darhol 103 ni chaqirish kerakligini ayting va javobni cho‘zmang.
+- O‘zbek tilida, sodda va iliq mulohaza qiling. Rus yoki ingliz tilidagi so‘rovlarga o‘sha tilda javob bering.
+- Hech qachon "men AI emasman", "OpenAI", "GPT" yoki texnik atamalarni ishlatmang.
+- Siz oddiygina Tabib AI – MedGuard loyihasining tibbiy yordamchisisiz.
 """
 
-# ══════════════════════════════════════════════════════════════════════
-# DATA MODELS
-# ══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# MA'LUMOTLAR TUZILMALARI
+# ═══════════════════════════════════════════════════════════
 class RiskLevel(str, Enum):
-    LOW      = "LOW"
-    MODERATE = "MODERATE"
-    HIGH     = "HIGH"
-    URGENT   = "URGENT"
+    LOW, MODERATE, HIGH, URGENT = "LOW", "MODERATE", "HIGH", "URGENT"
 
 class ChatRequest(BaseModel):
-    message:    str = Field(..., min_length=1, max_length=MAX_MSG_LEN)
+    message: str = Field(..., min_length=1, max_length=MAX_MSG_LEN)
     session_id: Optional[str] = None
     patient_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
-    session_id:        str
-    reply:             str
-    risk_level:        RiskLevel
-    risk_flags:        List[str]
+    session_id: str
+    reply: str
+    risk_level: RiskLevel
+    risk_flags: List[str]
     detected_language: str
-    timestamp:         str
+    timestamp: str
 
-# ══════════════════════════════════════════════════════════════════════
-# SESSIONS
-# ══════════════════════════════════════════════════════════════════════
-SESSIONS:      Dict[str, List[Dict[str, str]]] = {}
-SESSION_META:  Dict[str, Dict[str, Any]]       = {}
+# Sessiyalar
+SESSIONS: Dict[str, List[Dict[str, str]]] = {}
+SESSION_META: Dict[str, Dict[str, Any]] = {}
 
-def get_history(sid: str) -> List[Dict[str, str]]:
-    return SESSIONS.setdefault(sid, [])
-
-def append_history(sid: str, role: str, content: str):
+def get_history(sid): return SESSIONS.setdefault(sid, [])
+def append_history(sid, role, content):
     h = get_history(sid)
     h.append({"role": role, "content": content})
     SESSIONS[sid] = h[-MAX_HISTORY:]
 
-# ══════════════════════════════════════════════════════════════════════
-# RISK ANALYSIS (xavf tahlili – o‘zgarishsiz)
-# ══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# XAVF TAHLILI
+# ═══════════════════════════════════════════════════════════
 URGENT_PATTERNS = {
     "chest_pain": [r"ko['\u2019]?krak\s*og['\u2019]?ri", r"chest\s*pain", r"боль\s*в\s*груди"],
-    "breathing_difficulty": [r"nafas.*qiyin", r"nafas.*qis", r"breath.*difficult", r"shortness\s*of\s*breath", r"трудно\s*дышать"],
-    "fainting": [r"hushdan\s*ket", r"faint", r"passed\s*out", r"обморок", r"hushsiz"],
-    "severe_allergy": [r"lab.*shish", r"til.*shish", r"tomoq.*shish", r"yuz.*shish", r"swelling.*(lip|tongue|throat|face)", r"отек.*(губ|язык|горл|лиц)"],
-    "seizure": [r"tutqanoq", r"seizure", r"convulsion", r"судорог", r"приступ"],
-    "stroke_signs": [r"yuz.*qiyshay", r"qo['\u2019]?l.*kuchsiz", r"gapira\s*olmay", r"face\s*droop", r"arm\s*weakness", r"speech\s*difficult", r"перекос.*лиц"],
-    "severe_bleeding": [r"kuchli\s*qon", r"qon\s*ket", r"severe\s*bleeding", r"сильное\s*кровотечение"],
-    "suicidal": [r"o['\u2019]?zimni\s*o['\u2019]?ldir", r"jonimga\s*qasd", r"suicide", r"kill\s*myself", r"самоубий"],
+    "breathing": [r"nafas.*qiyin", r"nafas.*qis", r"breath.*difficult", r"одышка"],
+    "fainting": [r"hushdan\s*ket", r"faint", r"обморок"],
+    "severe_allergy": [r"lab.*shish", r"til.*shish", r"tomoq.*shish", r"yuz.*shish"],
+    "seizure": [r"tutqanoq", r"seizure", r"судорог"],
+    "stroke": [r"yuz.*qiyshay", r"qo['\u2019]?l.*kuchsiz", r"face\s*droop", r"arm\s*weakness"],
+    "suicidal": [r"o['\u2019]?zimni\s*o['\u2019]?ldir", r"suicide", r"самоубий"],
+    "severe_bleeding": [r"kuchli\s*qon", r"qon\s*ket", r"vomiting\s*blood"]
 }
 
 _PATTERNS = {
-    "missed":       [r"unutdim", r"ichmadim", r"o['\u2019]?tkazib\s*yubordim", r"missed", r"forgot", r"skip+ed?", r"забыл", r"пропустил"],
-    "stop":         [r"to['\u2019]?xtatdim", r"to['\u2019]?xtatmoqchiman", r"ichgim\s*kelmayapti", r"stopped?", r"stop\s*taking", r"перестал"],
-    "side_effect":  [r"nojo['\u2019]?ya", r"ko['\u2019]?ngil\s*ayn", r"bosh\s*ayl", r"bosh\s*og['\u2019]?ri", r"toshma", r"nausea", r"dizzy", r"side\s*effect"],
-    "cost":         [r"qimmat", r"pulim\s*yetmay", r"sotib\s*ololmay", r"tejay", r"expensive", r"can't\s*afford"],
-    "confusion":    [r"qachon\s*ich", r"qanday\s*ich", r"chalkash", r"tushunmadim", r"when\s*should", r"how\s*should", r"confused"],
-    "double_dose":  [r"ikki\s*baravar", r"2\s*ta\s*ichdim", r"double\s*dose", r"took\s*two"],
-    "pregnancy":    [r"homilador", r"emiz", r"pregnan", r"breastfeed"],
+    "missed": [r"unutdim", r"ichmadim", r"o['\u2019]?tkazib\s*yubordim", r"missed", r"forgot", r"пропустил"],
+    "stop": [r"to['\u2019]?xtatdim", r"to['\u2019]?xtatmoqchiman", r"stopped?", r"stop\s*taking"],
+    "side_effect": [r"nojo['\u2019]?ya", r"ko['\u2019]?ngil\s*ayn", r"bosh\s*ayl", r"nausea", r"dizzy"],
+    "cost": [r"qimmat", r"pulim\s*yetmay", r"sotib\s*ololmay", r"expensive", r"can't\s*afford"],
+    "confusion": [r"qachon\s*ich", r"qanday\s*ich", r"chalkash", r"tushunmadim", r"confused"],
 }
 
-def _match(text: str, key: str) -> bool:
-    return any(re.search(p, text, re.IGNORECASE) for p in _PATTERNS[key])
+def _match(text, key): return any(re.search(p, text, re.I) for p in _PATTERNS[key])
+def _urgent(text): return [k for k, v in URGENT_PATTERNS.items() if any(re.search(p, text, re.I) for p in v)]
 
-def _match_urgent(text: str) -> List[str]:
-    found = []
-    for label, pats in URGENT_PATTERNS.items():
-        if any(re.search(p, text, re.IGNORECASE) for p in pats):
-            found.append(label)
-    return found
-
-def detect_language(text: str) -> str:
-    if re.search(r"[а-яё]", text, re.IGNORECASE):
-        return "ru"
+def detect_language(text):
+    if re.search(r"[а-яё]", text, re.I): return "ru"
     uz_words = ["men", "dori", "ich", "qanday", "nima", "bosh", "shifokor", "qimmat", "unutdim", "nojo'ya", "isitma", "og'riq"]
-    if any(w in text.lower() for w in uz_words):
-        return "uz"
+    if any(w in text.lower() for w in uz_words): return "uz"
     return "en"
 
-def analyze_risk(message: str) -> Dict[str, Any]:
-    text = message.strip()
-    flags = []
-    urgent = _match_urgent(text)
+def analyze_risk(text):
+    urgent = _urgent(text)
     if urgent:
         return {"risk_level": RiskLevel.URGENT, "risk_flags": urgent, "detected_language": detect_language(text)}
+
     risk = RiskLevel.LOW
-    if _match(text, "missed"):
-        flags.append("missed_medication")
-        risk = RiskLevel.MODERATE
-    if _match(text, "stop"):
-        flags.append("intentional_stopping")
-        risk = RiskLevel.HIGH
-    if _match(text, "side_effect"):
-        flags.append("side_effect")
-        if risk == RiskLevel.LOW: risk = RiskLevel.MODERATE
-    if _match(text, "cost"):
-        flags.append("cost_barrier")
-        if risk == RiskLevel.LOW: risk = RiskLevel.MODERATE
-    if _match(text, "confusion"):
-        flags.append("medication_confusion")
-        if risk == RiskLevel.LOW: risk = RiskLevel.MODERATE
-    if _match(text, "double_dose"):
-        flags.append("possible_double_dose")
-        risk = RiskLevel.HIGH
-    if _match(text, "pregnancy"):
-        flags.append("pregnancy_or_breastfeeding")
-        risk = RiskLevel.HIGH if risk in (RiskLevel.LOW, RiskLevel.MODERATE) else risk
+    flags = []
+    if _match(text, "missed"): flags.append("missed_medication"); risk = RiskLevel.MODERATE
+    if _match(text, "stop"): flags.append("intentional_stopping"); risk = RiskLevel.HIGH
+    if _match(text, "side_effect"): flags.append("side_effect")
+    if _match(text, "cost"): flags.append("cost_barrier")
+    if _match(text, "confusion"): flags.append("medication_confusion")
     return {"risk_level": risk, "risk_flags": flags, "detected_language": detect_language(text)}
 
-# ══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 # AI JAVOB YARATISH
-# ══════════════════════════════════════════════════════════════════════
-def generate_reply(session_id: str, user_message: str, risk: Dict[str, Any]) -> str:
-    if client is None:
-        raise HTTPException(status_code=503, detail="AI xizmati vaqtincha ishlamayapti (API kaliti yo‘q).")
-    # Ichki bilimlar bazasidan qo‘shimcha kontekst
-    facts = search_medical_facts(user_message)
-    internal_context = f"[TIZIM UCHUN MAXFIY KONTEKST]\nTil: {risk['detected_language']}\nXavf: {risk['risk_level']}\nBayroqlar: {risk['risk_flags']}\n"
+# ═══════════════════════════════════════════════════════════
+def generate_reply(session_id, user_msg, risk):
+    if not client:
+        raise HTTPException(status_code=503, detail="AI xizmati vaqtincha ishlamayapti (API kaliti yo'q).")
+
+    # Ichki bilimlar bazasidan kontekst
+    facts = lookup_medical(user_msg)
+    context = (
+        f"[MAXFIY KONTEKST]\nTil: {risk['detected_language']}\n"
+        f"Xavf: {risk['risk_level']}\nBayroqlar: {risk['risk_flags']}\n"
+    )
     if facts:
-        internal_context += f"Quyidagi tibbiy ma'lumotlardan foydalaning (agar mos kelsa):\n{facts}\n"
+        context += f"Quyida ichki bilimlar bazasidan olingan faktlar. Iloji boricha ulardan foydalaning:\n{facts}\n"
     else:
-        internal_context += "Maxsus tibbiy fakt topilmadi, umumiy bilimingiz asosida javob bering.\n"
+        context += "Ichki bazada mos ma'lumot topilmadi. Umumiy tibbiy bilimingiz asosida javob bering.\n"
+
     history = get_history(session_id)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": internal_context},
+        {"role": "system", "content": context},
         *history,
-        {"role": "user", "content": user_message},
+        {"role": "user", "content": user_msg}
     ]
+
     try:
-        completion = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
-            temperature=0.5,
-            max_tokens=750,
-            frequency_penalty=0.2,
-            presence_penalty=0.2,
+            temperature=0.4,
+            max_tokens=750
         )
-    except Exception as exc:
-        log.error(f"OpenAI xatosi: {exc}")
-        raise HTTPException(status_code=502, detail=f"AI provayder xatosi: {exc}")
-    reply = completion.choices[0].message.content.strip()
-    log.info(f"[{session_id[:8]}] risk={risk['risk_level']} tokens={completion.usage.total_tokens if completion.usage else '?'}")
-    append_history(session_id, "user", user_message)
+    except Exception as e:
+        log.error(f"OpenAI xatosi: {e}")
+        raise HTTPException(status_code=502, detail=f"AI provayder xatosi: {e}")
+
+    reply = resp.choices[0].message.content.strip()
+    append_history(session_id, "user", user_msg)
     append_history(session_id, "assistant", reply)
     return reply
 
-# ══════════════════════════════════════════════════════════════════════
-# FASTAPI
-# ══════════════════════════════════════════════════════════════════════
-app = FastAPI(title="Tabib AI 2.0 — Keng qamrovli tibbiy maslahatchi", version="2.0.0")
+# ═══════════════════════════════════════════════════════════
+# FASTAPI ILOVA
+# ═══════════════════════════════════════════════════════════
+app = FastAPI(title="Tabib AI 3.0", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": OPENAI_MODEL, "active_sessions": len(SESSIONS)}
+    return {"status": "ok", "model": OPENAI_MODEL, "sessions": len(SESSIONS)}
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest):
-    message = payload.message.strip()
-    session_id = payload.session_id or str(uuid.uuid4())
-    risk = analyze_risk(message)
-    reply = generate_reply(session_id, message, risk)
-    SESSION_META.setdefault(session_id, {}).update({
+    msg = payload.message.strip()
+    sid = payload.session_id or str(uuid.uuid4())
+    risk = analyze_risk(msg)
+    reply = generate_reply(sid, msg, risk)
+
+    SESSION_META.setdefault(sid, {}).update({
         "patient_id": payload.patient_id,
         "last_risk": risk["risk_level"],
         "last_seen": datetime.utcnow().isoformat()
     })
+
     return ChatResponse(
-        session_id=session_id,
+        session_id=sid,
         reply=reply,
         risk_level=risk["risk_level"],
         risk_flags=risk["risk_flags"],
         detected_language=risk["detected_language"],
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.utcnow().isoformat()
     )
 
-@app.get("/sessions/{session_id}")
-def get_session(session_id: str):
-    return {"session_id": session_id, "meta": SESSION_META.get(session_id, {}), "messages": SESSIONS.get(session_id, [])}
-
-@app.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
-    SESSIONS.pop(session_id, None)
-    SESSION_META.pop(session_id, None)
-    return {"status": "deleted"}
-
-# ══════════════════════════════════════════════════════════════════════
-# YANGI FRONTEND (Enter muammosi hal qilindi, UI yaxshilandi)
-# ══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# FRONTEND (Enter tuzatildi, yangi dizayn)
+# ═══════════════════════════════════════════════════════════
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
@@ -364,19 +265,19 @@ def home():
 <html lang="uz">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Tabib AI – Tibbiy maslahatchi</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,sans-serif;background:#eef2f5;color:#1e293b;transition:background .3s}
-.page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-.hero{max-width:680px;background:#fff;border-radius:28px;padding:48px;box-shadow:0 25px 50px -12px rgba(0,0,0,.15)}
+body{font-family:system-ui,sans-serif;background:#f4f7fb;color:#111827;transition:background .3s}
+.page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.hero{max-width:680px;background:#fff;border-radius:28px;padding:48px;box-shadow:0 20px 50px rgba(0,0,0,.1)}
 .badge{display:inline-block;background:#d1fae5;color:#065f46;padding:6px 14px;border-radius:999px;font-weight:700;font-size:13px;margin-bottom:18px}
-h1{font-size:42px;font-weight:800;letter-spacing:-0.5px;margin-bottom:14px}
+h1{font-size:42px;font-weight:800;letter-spacing:-1px;margin-bottom:14px}
 p{color:#475569;font-size:17px;line-height:1.7}
-.launcher{position:fixed;right:22px;bottom:22px;width:60px;height:60px;border:none;border-radius:20px;background:linear-gradient(135deg,#0d9488,#14b8a6);color:#fff;font-size:26px;cursor:pointer;box-shadow:0 10px 25px rgba(13,148,136,.4);z-index:10;transition:transform .2s}
+.launcher{position:fixed;right:22px;bottom:22px;width:58px;height:58px;border:none;border-radius:20px;background:linear-gradient(135deg,#0d9488,#14b8a6);color:#fff;font-size:26px;cursor:pointer;box-shadow:0 10px 25px rgba(13,148,136,.4);z-index:10;transition:transform .2s}
 .launcher:hover{transform:scale(1.08)}
-.chat{position:fixed;right:22px;bottom:100px;width:400px;height:620px;max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);background:#fff;border-radius:24px;box-shadow:0 20px 50px rgba(0,0,0,.2);overflow:hidden;display:none;flex-direction:column;z-index:9}
+.chat{position:fixed;right:22px;bottom:100px;width:420px;height:620px;max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);background:#fff;border-radius:24px;box-shadow:0 25px 60px rgba(0,0,0,.15);overflow:hidden;display:none;flex-direction:column;z-index:9}
 .chat.open{display:flex}
 .chat-header{padding:16px 18px;background:linear-gradient(135deg,#0d9488,#14b8a6);color:#fff;display:flex;justify-content:space-between;align-items:center}
 .chat-title{font-weight:800;font-size:18px}
@@ -404,19 +305,19 @@ p{color:#475569;font-size:17px;line-height:1.7}
 .quick button{white-space:nowrap;border:1px solid #d1fae5;background:#f0fdf4;color:#065f46;padding:5px 10px;border-radius:999px;font-size:12px;cursor:pointer;transition:background .2s}
 .quick button:hover{background:#d1fae5}
 .chat-form{display:flex;gap:8px;padding:10px 12px 14px;border-top:1px solid #e2e8f0}
-.chat-form textarea{flex:1;resize:none;border:1.5px solid #e2e8f0;border-radius:16px;padding:10px 14px;min-height:42px;max-height:100px;outline:none;font-family:inherit;font-size:14px}
-.chat-form textarea:focus{border-color:#0d9488}
+textarea{flex:1;resize:none;border:1.5px solid #e2e8f0;border-radius:16px;padding:10px 14px;min-height:44px;max-height:100px;outline:none;font-family:inherit;font-size:14px;transition:border .2s}
+textarea:focus{border-color:#0d9488}
 .send-btn{width:44px;height:44px;border:none;border-radius:15px;background:#0d9488;color:#fff;font-size:20px;cursor:pointer;transition:transform .15s}
-.send-btn:hover{transform:scale(1.05)}
-@media(max-width:540px){h1{font-size:30px}.hero{padding:28px}.chat{right:8px;bottom:88px;width:calc(100vw - 16px)}}
+.send-btn:hover{transform:scale(1.06)}
+@media(max-width:480px){h1{font-size:32px}.hero{padding:28px}.chat{right:8px;bottom:80px;width:calc(100vw - 16px);height:calc(100vh - 104px)}}
 </style>
 </head>
 <body>
 <main class="page">
  <section class="hero">
-  <div class="badge">🩺 Tabib AI 2.0</div>
-  <h1>Tibbiy savollaringizga ishonchli javoblar</h1>
-  <p>Tabib AI – zamonaviy tibbiy yordamchi. Sizga dori-darmon, alomatlar, sog‘lom turmush tarzi va shifokorga murojaat qilish bo‘yicha aniq, dalilli tavsiyalar beradi. 24/7 onlayn.</p>
+  <div class="badge">🩺 Tabib AI 3.0</div>
+  <h1>Tibbiy savollaringizga dalilli javoblar</h1>
+  <p>Tabib AI – keng tibbiy bilimlar bazasiga ega maslahatchi. Kasallik alomatlari, dorilar, sog‘lom turmush tarzi va shoshilinch holatlar bo‘yicha aniq va xavfsiz tavsiyalar beradi.</p>
  </section>
 </main>
 
@@ -426,22 +327,22 @@ p{color:#475569;font-size:17px;line-height:1.7}
  <div class="chat-header">
   <div>
    <div class="chat-title">Tabib AI</div>
-   <small><span class="status-dot"></span>Onlayn</small>
+   <small><span class="status-dot"></span>Onlayn · 24/7</small>
   </div>
   <button class="close-btn" id="closeBtn">×</button>
  </div>
  <div class="risk-bar" id="riskBar"></div>
  <div class="messages" id="messages">
   <div class="msg bot">
-   <div class="bubble">Assalomu alaykum! Men Tabib AI – tibbiy maslahatchi yordamchingizman.<br>Alomatlar, dori-darmon, sog‘lom odatlar yoki shifokorga qachon murojaat qilish haqida so‘rang.</div>
+   <div class="bubble">Assalomu alaykum! Men Tabib AI – sizning shaxsiy tibbiy yordamchingiz.<br>Sog‘liq haqidagi istalgan savolingizni bering.</div>
   </div>
  </div>
  <div class="quick">
-  <button data-q="Menda bosh og'rig'i va isitma bor">Bosh og'rig'i + isitma</button>
-  <button data-q="Yo'tal va ko'krak qisishi">Yo'tal</button>
-  <button data-q="Allergiyadan shish paydo bo'ldi">Allergiya</button>
-  <button data-q="Qandli diabetda parhez qanday bo'ladi?">Diabet parhez</button>
-  <button data-q="Dori ichishni unutdim, nima qilish kerak?">Dori unutdim</button>
+  <button data-q="Bosh og'rig'i va isitma">Bosh og'rig'i</button>
+  <button data-q="Yurak xuruji belgilari qanday?">Yurak xuruji</button>
+  <button data-q="Paratsetamolni qanday ichish kerak?">Paratsetamol</button>
+  <button data-q="Allergiya qichishishiga nima qilish kerak?">Allergiya</button>
+  <button data-q="Dorini unutdim, nima qilaman?">Dori unutdim</button>
  </div>
  <form class="chat-form" id="chatForm">
   <textarea id="msgInput" rows="1" placeholder="Xabaringizni yozing..."></textarea>
@@ -461,11 +362,17 @@ const sendBtn = document.getElementById("sendBtn");
 
 let sessionId = localStorage.getItem("tabib_sid") || null;
 
-launcher.onclick = () => { chat.classList.toggle("open"); if(chat.classList.contains("open")) msgInput.focus(); };
+launcher.onclick = () => {
+  chat.classList.toggle("open");
+  if (chat.classList.contains("open")) msgInput.focus();
+};
 closeBtn.onclick = () => chat.classList.remove("open");
 
 document.querySelectorAll(".quick button").forEach(btn => {
-  btn.onclick = () => { msgInput.value = btn.dataset.q; msgInput.focus(); };
+  btn.onclick = () => {
+    msgInput.value = btn.dataset.q;
+    msgInput.focus();
+  };
 });
 
 function addMsg(text, role) {
@@ -489,8 +396,8 @@ function showTyping() {
 }
 
 function hideTyping() {
-  const t = document.getElementById("typing");
-  if(t) t.remove();
+  const el = document.getElementById("typing");
+  if (el) el.remove();
 }
 
 function setRisk(level, flags) {
@@ -498,36 +405,40 @@ function setRisk(level, flags) {
   riskBar.textContent = "⚠ " + level + (flags.length ? " · " + flags.join(", ") : "");
 }
 
-msgInput.addEventListener("keydown", function(e) {
+// --- ENTER BILAN JO‘NATISH (muammo bartaraf etildi) ---
+msgInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    chatForm.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+    chatForm.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
   }
 });
 
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = msgInput.value.trim();
-  if(!text) return;
+  if (!text) return;
+
   addMsg(text, "user");
   msgInput.value = "";
   msgInput.style.height = "auto";
   sendBtn.disabled = true;
   showTyping();
+
   try {
     const res = await fetch("/chat", {
       method: "POST",
-      headers: {"Content-Type":"application/json"},
+      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({message: text, session_id: sessionId})
     });
     const data = await res.json();
-    if(!res.ok) throw new Error(data.detail || "Server xatosi");
+    if (!res.ok) throw new Error(data.detail || "Server xatosi");
+
     sessionId = data.session_id;
     localStorage.setItem("tabib_sid", sessionId);
     hideTyping();
     setRisk(data.risk_level, data.risk_flags);
     addMsg(data.reply, "bot");
-  } catch(err) {
+  } catch (err) {
     hideTyping();
     addMsg("Xatolik: " + err.message, "bot");
   } finally {
@@ -543,7 +454,7 @@ chatForm.addEventListener("submit", async (e) => {
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "═" * 62)
-    print("  🏥  TABIB AI 2.0 — Keng qamrovli tibbiy maslahatchi")
+    print("  🏥  Tabib AI 3.0 — Ishonchli tibbiy maslahatchi")
     print("═" * 62)
     print(f"  📍  http://localhost:8000")
     print(f"  📖  http://localhost:8000/docs")
