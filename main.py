@@ -1962,6 +1962,31 @@ def generate_reply(session_id: str, user_message: str, risk: Dict[str, Any]) -> 
     return reply
 
 
+
+# ══════════════════════════════════════════════════════════════════════
+# FASTAPI APP
+# ══════════════════════════════════════════════════════════════════════
+
+app = FastAPI(
+    title="Tabib AI — Medication Adherence Expert",
+    description="Clinical-grade AI chatbot for medication adherence support",
+    version="2.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# API ROUTES
+# ══════════════════════════════════════════════════════════════════════
+
+@app.get("/health")
 def health():
     return {
         "status":               "ok",
